@@ -3,6 +3,44 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
+
+## [1.10.1] - 2019-06-27
+### Fixed
+- Properly handle errors in the `ctds.pool.ConnectionPool.connection` context
+manager.
+
+## [1.10.0] - 2019-04-15
+### Added
+- Add FreeTDS 1.1 to test matrix.
+
+### Fixed
+- Preserve microsecond precision of _TIME_ and _DATETIME2_ SQL types when
+converting to Python (and supported by FreeTDS).
+- Fix improper conversion of empty strings to `NULL` in
+`ctds.Connection.bulk_insert()`.
+https://github.com/zillow/ctds/issues/35.
+
+## [1.9.0] - 2018-11-05
+### Added
+- Add support for passing sequences of `dict` values to
+`ctds.Connection.bulk_insert`. The mapping key is used to determine the column
+order based on the column info available after `bcp_init`.
+https://github.com/zillow/ctds/issues/38
+
+### Fixed
+- Fix truncation of strings containing multi-byte sequences when not using
+`sp_executesql`.
+- Fix `ctds.Cursor.executemany()` truncating data for integer types.
+https://github.com/zillow/ctds/issues/43.
+
+## [1.8.0] - 2018-09-07
+### Added
+- Official support for Python 3.7.
+- Add optional `hostname` parameter to `ctds.connect()`.
+https://github.com/zillow/ctds/issues/20.
+- Add optional `ntlmv2` parameter to `ctds.connect()`.
+https://github.com/zillow/ctds/issues/27.
+
 ### Fixed
 - Retry on SQL Server unittest database setup failures due to race conditions
 when starting SQL Server. This should make the unit tests much more reliable.
@@ -10,11 +48,14 @@ when starting SQL Server. This should make the unit tests much more reliable.
 - Properly handle decimal.Decimal values specified in scientific notation.
 - Properly set autocommit in `ctds.connect()`, even when `ansi_defaults` is
 `False`.
-- Download FreeTDS packages from HTTP URL for compatability with Travis CI
+- Download FreeTDS packages from HTTP URL for compatibility with Travis CI
 builds (FTP no longer works due to firewall issues.)
 - Fix OS X Travis CI build.
 - Improve SQL Server -> DB API 2.0 error mappings.
+https://github.com/zillow/ctds/issues/12
 - Remove Python 2.6 from Appveyor CI due to lack of support.
+- Fix `ctds.Cursor.executemany()` truncating data for variable width types.
+https://github.com/zillow/ctds/issues/25.
 
 ## [1.7.0] - 2018-01-24
 ### Added
@@ -198,28 +239,31 @@ _NVARCHAR_ arguments to remote procedure calls.
 ## [1.0.0] - 2016-03-14
 Initial Release
 
-[Unreleased]: https://github.com/zillow/ctds/compare/v1.7.0...HEAD
-[1.7.0]: https://github.com/zillow/ctds/compare/v1.7.0...v1.6.3
-[1.6.3]: https://github.com/zillow/ctds/compare/v1.6.3...v1.6.2
-[1.6.2]: https://github.com/zillow/ctds/compare/v1.6.2...v1.6.1
-[1.6.1]: https://github.com/zillow/ctds/compare/v1.6.1...v1.6.0
-[1.6.0]: https://github.com/zillow/ctds/compare/v1.6.0...v1.5.0
-[1.5.0]: https://github.com/zillow/ctds/compare/v1.5.0...v1.4.1
-[1.4.1]: https://github.com/zillow/ctds/compare/v1.4.1...v1.4.0
-[1.4.0]: https://github.com/zillow/ctds/compare/v1.4.0...v1.3.2
-[1.3.2]: https://github.com/zillow/ctds/compare/v1.3.2...v1.3.1
-[1.3.1]: https://github.com/zillow/ctds/compare/v1.3.1...v1.3.0
-[1.3.0]: https://github.com/zillow/ctds/compare/v1.3.0...v1.2.3
-[1.2.3]: https://github.com/zillow/ctds/compare/v1.2.3...v1.2.2
-[1.2.2]: https://github.com/zillow/ctds/compare/v1.2.2...v1.2.1
-[1.2.1]: https://github.com/zillow/ctds/compare/v1.2.1...v1.2.0
-[1.2.0]: https://github.com/zillow/ctds/compare/v1.2.0...v1.1.0
-[1.1.0]: https://github.com/zillow/ctds/compare/v1.1.0...v1.0.8
-[1.0.8]: https://github.com/zillow/ctds/compare/v1.0.8...v1.0.7
-[1.0.7]: https://github.com/zillow/ctds/compare/v1.0.7...v1.0.6
-[1.0.6]: https://github.com/zillow/ctds/compare/v1.0.6...v1.0.5
-[1.0.5]: https://github.com/zillow/ctds/compare/v1.0.5...v1.0.4
-[1.0.4]: https://github.com/zillow/ctds/compare/v1.0.4...v1.0.5
+[Unreleased]: https://github.com/zillow/ctds/compare/v1.10.1...HEAD
+[1.10.1]: https://github.com/zillow/ctds/compare/v1.10.0...v1.10.1
+[1.10.0]: https://github.com/zillow/ctds/compare/v1.9.0...v1.10.0
+[1.9.0]: https://github.com/zillow/ctds/compare/v1.8.0...v1.9.0
+[1.8.0]: https://github.com/zillow/ctds/compare/v1.7.0...v1.8.0
+[1.7.0]: https://github.com/zillow/ctds/compare/v1.6.3...v1.7.0
+[1.6.3]: https://github.com/zillow/ctds/compare/v1.6.2...v1.6.3
+[1.6.2]: https://github.com/zillow/ctds/compare/v1.6.1...v1.6.2
+[1.6.1]: https://github.com/zillow/ctds/compare/v1.6.0...v1.6.1
+[1.6.0]: https://github.com/zillow/ctds/compare/v1.5.0...v1.6.0
+[1.5.0]: https://github.com/zillow/ctds/compare/v1.4.1...v1.5.0
+[1.4.1]: https://github.com/zillow/ctds/compare/v1.4.0...v1.4.1
+[1.4.0]: https://github.com/zillow/ctds/compare/v1.3.2...v1.4.0
+[1.3.2]: https://github.com/zillow/ctds/compare/v1.3.1...v1.3.2
+[1.3.1]: https://github.com/zillow/ctds/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/zillow/ctds/compare/v1.2.3...v1.3.0
+[1.2.3]: https://github.com/zillow/ctds/compare/v1.2.2...v1.2.3
+[1.2.2]: https://github.com/zillow/ctds/compare/v1.2.1...v1.2.2
+[1.2.1]: https://github.com/zillow/ctds/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/zillow/ctds/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/zillow/ctds/compare/v1.0.8...v1.1.0
+[1.0.8]: https://github.com/zillow/ctds/compare/v1.0.7...v1.0.8
+[1.0.7]: https://github.com/zillow/ctds/compare/v1.0.6...v1.0.7
+[1.0.6]: https://github.com/zillow/ctds/compare/v1.0.5...v1.0.6
+[1.0.5]: https://github.com/zillow/ctds/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/zillow/ctds/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/zillow/ctds/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/zillow/ctds/compare/v1.0.1...v1.0.2

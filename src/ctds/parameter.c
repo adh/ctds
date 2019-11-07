@@ -66,7 +66,11 @@ struct Parameter
         DBINT dbint;
         DBBIGINT dbbigint;
         DBDECIMAL dbdecimal;
+#if defined(CTDS_HAVE_TDSTIME)
+        DBDATETIMEALL dbdatetime;
+#else /* if defined(CTDS_HAVE_TDSTIME) */
         DBDATETIME dbdatetime;
+#endif /* else if defined(CTDS_HAVE_TDSTIME) */
         DBFLT8 dbflt8;
     } buffer;
 
@@ -257,23 +261,14 @@ static int Parameter_bind(struct Parameter* parameter, PyObject* value)
         struct SqlType* sqltype = (struct SqlType*)value;
         parameter->input = sqltype->data;
         parameter->ninput = sqltype->ndata;
-
-        switch (sqltype->tdstype)
-        {
-            case TDSDATE:
-            {
-                /* FreeTDS 0.9.15 doesn't support TDSDATE properly. Fallback to DATETIME. */
-                parameter->tdstype = TDSDATETIME;
-                break;
-            }
-            default:
-            {
-                parameter->tdstype = sqltype->tdstype;
-                break;
-            }
-        }
-
         parameter->tdstypesize = (DBINT)sqltype->size;
+        parameter->tdstype = sqltype->tdstype;
+
+        if (TDSDATE == sqltype->tdstype)
+        {
+            /* FreeTDS doesn't support passing TDSDATE properly. Fallback to DATETIME. */
+            parameter->tdstype = TDSDATETIME;
+        }
     }
     else
     {
@@ -288,7 +283,7 @@ static int Parameter_bind(struct Parameter* parameter, PyObject* value)
             {
                 size_t nchars; /* number of unicode characters in the string */
 
-                char* utf8bytes;
+                const char* utf8bytes;
 
                 Py_XDECREF(parameter->source);
                 parameter->source = encode_for_dblib(value, &utf8bytes, &parameter->ninput, &nchars);
@@ -296,7 +291,7 @@ static int Parameter_bind(struct Parameter* parameter, PyObject* value)
                 {
                     break;
                 }
-                parameter->input = (void*)utf8bytes;
+                parameter->input = (const void*)utf8bytes;
 
                 /*
                     FreeTDS does not support passing *VARCHAR(MAX) types.
@@ -321,7 +316,7 @@ static int Parameter_bind(struct Parameter* parameter, PyObject* value)
             {
                 parameter->buffer.byte = (BYTE)(Py_True == value);
 
-                parameter->input = (void*)&parameter->buffer;
+                parameter->input = (const void*)&parameter->buffer;
                 parameter->ninput = sizeof(parameter->buffer.byte);
 
                 parameter->tdstype = TDSBITN;
@@ -379,7 +374,7 @@ static int Parameter_bind(struct Parameter* parameter, PyObject* value)
                     parameter->tdstype = TDSBIGINT;
                 }
 
-                parameter->input = (void*)&parameter->buffer;
+                parameter->input = (const void*)&parameter->buffer;
             }
             else if (PyBytes_Check(value) || PyByteArray_Check(value))
             {
@@ -388,12 +383,12 @@ static int Parameter_bind(struct Parameter* parameter, PyObject* value)
                     char* data;
                     Py_ssize_t size;
                     (void)PyBytes_AsStringAndSize(value, &data, &size);
-                    parameter->input = (void*)data;
+                    parameter->input = (const void*)data;
                     parameter->ninput = (size_t)size;
                 }
                 else
                 {
-                    parameter->input = (void*)PyByteArray_AS_STRING(value);
+                    parameter->input = (const void*)PyByteArray_AS_STRING(value);
                     parameter->ninput = (size_t)PyByteArray_GET_SIZE(value);
                 }
 
@@ -410,7 +405,7 @@ static int Parameter_bind(struct Parameter* parameter, PyObject* value)
             {
                 parameter->buffer.dbflt8 = (DBFLT8)PyFloat_AS_DOUBLE(value);
 
-                parameter->input = (void*)&parameter->buffer;
+                parameter->input = (const void*)&parameter->buffer;
                 parameter->ninput = sizeof(parameter->buffer.dbflt8);
 
                 parameter->tdstype = TDSFLOAT;
@@ -501,7 +496,7 @@ static int Parameter_bind(struct Parameter* parameter, PyObject* value)
                         {
                             parameter->ninput = (size_t)size;
                             parameter->tdstype = TDSDECIMAL;
-                            parameter->input = (void*)&parameter->buffer;
+                            parameter->input = (const void*)&parameter->buffer;
                         }
                     } while (0);
                 } while (0);
@@ -512,15 +507,18 @@ static int Parameter_bind(struct Parameter* parameter, PyObject* value)
             }
             else if (PyDate_Check_(value) || PyTime_Check_(value))
             {
-                if (-1 == datetime_to_sql(value, &parameter->buffer.dbdatetime))
+                int ninput = datetime_to_sql(value,
+                                             &parameter->tdstype,
+                                             &parameter->buffer.dbdatetime,
+                                             sizeof(parameter->buffer.dbdatetime));
+                if (-1 == ninput)
                 {
                     PyErr_Format(PyExc_tds_InterfaceError, "failed to convert datetime");
                     break;
                 }
 
-                parameter->ninput = sizeof(parameter->buffer.dbdatetime);
-                parameter->tdstype = TDSDATETIME;
-                parameter->input = (void*)&parameter->buffer;
+                parameter->ninput = (size_t)ninput;
+                parameter->input = (const void*)&parameter->buffer;
             }
             else if (PyUuid_Check(value))
             {
@@ -537,10 +535,10 @@ static int Parameter_bind(struct Parameter* parameter, PyObject* value)
                     Py_XDECREF(parameter->source);
                     parameter->source = uuidstr; /* claim reference */
 #if PY_MAJOR_VERSION < 3
-                    parameter->input = (void*)PyString_AS_STRING(uuidstr);
+                    parameter->input = (const void*)PyString_AS_STRING(uuidstr);
                     parameter->ninput = (size_t)PyString_GET_SIZE(uuidstr);
 #else /* if PY_MAJOR_VERSION < 3 */
-                    parameter->input = (void*)PyUnicode_AsUTF8AndSize(uuidstr, &size);
+                    parameter->input = (const void*)PyUnicode_AsUTF8AndSize(uuidstr, &size);
                     parameter->ninput = (size_t)size;
 #endif /* else if PY_MAJOR_VERSION < 3 */
 
@@ -637,7 +635,11 @@ struct Parameter* Parameter_create(PyObject* value, bool output)
                         case TDSTIME:
                         case TDSDATETIME2:
                         {
+#if defined(CTDS_HAVE_TDSTIME)
+                            parameter->noutput = sizeof(DBDATETIMEALL);
+#else /* if defined(CTDS_HAVE_TDSTIME) */
                             parameter->noutput = sizeof(DBDATETIME);
+#endif /* else if defined(CTDS_HAVE_TDSTIME) */
                             break;
                         }
                         case TDSSMALLMONEY:
@@ -712,6 +714,11 @@ RETCODE Parameter_bcp_bind(struct Parameter* parameter, DBPROCESS* dbproc, size_
         has requested a Unicode type, map it to the equivalent single-byte representation.
     */
     enum TdsType tdstype;
+    BYTE* input = (BYTE*)parameter->input;
+
+    /* Use the input byte count for non-NULL, variable-length types. */
+    DBINT cbinput = (parameter->tdstypesize > 0) ? (DBINT)parameter->ninput : parameter->tdstypesize;
+
     if ((parameter->tdstype == TDSNTEXT) || (parameter->tdstype == TDSNVARCHAR))
     {
         /*
@@ -724,11 +731,32 @@ RETCODE Parameter_bcp_bind(struct Parameter* parameter, DBPROCESS* dbproc, size_
     {
         tdstype = parameter->tdstype;
     }
+
+    /*
+        0-length, non-NULL inputs are intended to be empty strings, but to
+        properly pass an empty string, a NULL-terminated string must be
+        provided to `bcp_bind`.
+    */
+    if ((0 == parameter->ninput) && (NULL != input))
+    {
+#if CTDS_SUPPORT_BCP_EMPTY_STRING
+        input = (BYTE*)"";
+        cbinput = -1;
+#else /* if CTDS_SUPPORT_BCP_EMPTY_STRING */
+        if (PyErr_WarnEx(PyExc_tds_Warning,
+                         "\"\" converted to NULL for compatibility with FreeTDS."
+                         " Please update to a recent version of FreeTDS.",
+                         1))
+        {
+            return FAIL;
+        }
+#endif /* else if CTDS_SUPPORT_BCP_EMPTY_STRING */
+    }
+
     return bcp_bind(dbproc,
-                    (BYTE*)parameter->input,
+                    input,
                     0,
-                    /* Use the input byte count for non-NULL, variable-length types. */
-                    (parameter->tdstypesize > 0) ? (DBINT)parameter->ninput : parameter->tdstypesize,
+                    cbinput,
                     NULL,
                     0,
                     tdstype,
@@ -740,7 +768,7 @@ bool Parameter_output(struct Parameter* rpcparam)
     return (NULL != rpcparam->output);
 }
 
-char* Parameter_sqltype(struct Parameter* rpcparam)
+char* Parameter_sqltype(struct Parameter* rpcparam, bool maximum_width)
 {
     char* sql = NULL;
     switch (rpcparam->tdstype)
@@ -750,7 +778,7 @@ char* Parameter_sqltype(struct Parameter* rpcparam)
 
         case TDSNVARCHAR:
         {
-            if (rpcparam->tdstypesize > TDS_NCHAR_MAX_SIZE)
+            if ((rpcparam->tdstypesize > TDS_NCHAR_MAX_SIZE) || maximum_width)
             {
                 sql = tds_mem_strdup("NVARCHAR(MAX)");
                 break;
@@ -761,7 +789,7 @@ char* Parameter_sqltype(struct Parameter* rpcparam)
         {
             /* The typesize will be 0 for NULL values, but the SQL type size must be 1. */
             assert(0 <= rpcparam->tdstypesize && rpcparam->tdstypesize <= TDS_NCHAR_MAX_SIZE);
-            sql = (char*)tds_mem_malloc(ARRAYSIZE("NVARCHAR(" STRINGIFY(TDS_NCHAR_MAX_SIZE) ")"));
+            sql = tds_mem_malloc(ARRAYSIZE("NVARCHAR(" STRINGIFY(TDS_NCHAR_MAX_SIZE) ")"));
             if (sql)
             {
                 (void)sprintf(sql,
@@ -773,7 +801,7 @@ char* Parameter_sqltype(struct Parameter* rpcparam)
         }
         case TDSVARCHAR:
         {
-            if (rpcparam->tdstypesize > TDS_CHAR_MAX_SIZE)
+            if ((rpcparam->tdstypesize > TDS_CHAR_MAX_SIZE) || maximum_width)
             {
                 sql = tds_mem_strdup("VARCHAR(MAX)");
                 break;
@@ -784,7 +812,7 @@ char* Parameter_sqltype(struct Parameter* rpcparam)
         {
             /* The typesize will be 0 for NULL values, but the SQL type size must be 1. */
             assert(0 <= rpcparam->tdstypesize && rpcparam->tdstypesize <= TDS_CHAR_MAX_SIZE);
-            sql = (char*)tds_mem_malloc(ARRAYSIZE("VARCHAR(" STRINGIFY(TDS_CHAR_MAX_SIZE) ")"));
+            sql = tds_mem_malloc(ARRAYSIZE("VARCHAR(" STRINGIFY(TDS_CHAR_MAX_SIZE) ")"));
             if (sql)
             {
                 (void)sprintf(sql,
@@ -800,12 +828,32 @@ char* Parameter_sqltype(struct Parameter* rpcparam)
         case TDSBITN:
         CONST_CASE(BIT)
 
-        case TDSINTN:
-            /* INTN can represent up to 32 bit integers. */
-        CONST_CASE(INT)
-        CONST_CASE(TINYINT)
-        CONST_CASE(SMALLINT)
-        CONST_CASE(BIGINT)
+        case TDSINTN: /* INTN can represent up to 32 bit integers. */
+        case TDSINT:
+        case TDSTINYINT:
+        case TDSSMALLINT:
+        case TDSBIGINT:
+        {
+            const char* prefix = "";
+            if (maximum_width || TDSBIGINT == rpcparam->tdstype)
+            {
+                prefix = "BIG";
+            }
+            else if (TDSTINYINT == rpcparam->tdstype)
+            {
+                prefix = "TINY";
+            }
+            else if (TDSSMALLINT == rpcparam->tdstype)
+            {
+                prefix = "SMALL";
+            }
+            sql = tds_mem_malloc(ARRAYSIZE("SMALLINT"));
+            if (sql)
+            {
+                (void)sprintf(sql, "%sINT", prefix);
+            }
+            break;
+        }
 
         case TDSFLOAT:
         case TDSFLOATN:
@@ -818,6 +866,7 @@ char* Parameter_sqltype(struct Parameter* rpcparam)
 
         case TDSDATETIMEN:
         CONST_CASE(DATETIME)
+        CONST_CASE(DATETIME2)
         CONST_CASE(SMALLDATETIME)
         CONST_CASE(DATE)
         CONST_CASE(TIME)
@@ -831,7 +880,7 @@ char* Parameter_sqltype(struct Parameter* rpcparam)
         case TDSNUMERIC:
         case TDSDECIMAL:
         {
-            sql = (char*)tds_mem_malloc(ARRAYSIZE("DECIMAL(38,38)"));
+            sql = tds_mem_malloc(ARRAYSIZE("DECIMAL(38,38)"));
             if (sql)
             {
                 const DBDECIMAL* dbdecimal = (const DBDECIMAL*)rpcparam->input;
@@ -846,7 +895,7 @@ char* Parameter_sqltype(struct Parameter* rpcparam)
 
         case TDSVARBINARY:
         {
-            if (rpcparam->tdstypesize > 8000)
+            if ((rpcparam->tdstypesize > TDS_BINARY_MAX_SIZE) || maximum_width)
             {
                 sql = tds_mem_strdup("VARBINARY(MAX)");
                 break;
@@ -855,8 +904,8 @@ char* Parameter_sqltype(struct Parameter* rpcparam)
         }
         case TDSBINARY:
         {
-            assert(1 <= rpcparam->tdstypesize && rpcparam->tdstypesize <= 8000);
-            sql = (char*)tds_mem_malloc(ARRAYSIZE("VARBINARY(8000)"));
+            assert(1 <= rpcparam->tdstypesize && rpcparam->tdstypesize <= TDS_BINARY_MAX_SIZE);
+            sql = tds_mem_malloc(ARRAYSIZE("VARBINARY(" STRINGIFY(TDS_BINARY_MAX_SIZE) ")"));
             if (sql)
             {
                 (void)sprintf(sql,
@@ -885,7 +934,7 @@ PyObject* Parameter_value(struct Parameter* rpcparam)
 
 #if !defined(CTDS_USE_SP_EXECUTESQL)
 
-char* Parameter_serialize(struct Parameter* rpcparam, size_t* nserialized)
+char* Parameter_serialize(struct Parameter* rpcparam, bool maximum_width, size_t* nserialized)
 {
     char* serialized = NULL;
     char* value = NULL;
@@ -929,7 +978,7 @@ char* Parameter_serialize(struct Parameter* rpcparam, size_t* nserialized)
                     size_t ixsrc;
                     if (write)
                     {
-                        value = (char*)tds_mem_malloc(written);
+                        value = tds_mem_malloc(written);
                         if (!value)
                         {
                             PyErr_NoMemory();
@@ -941,7 +990,7 @@ char* Parameter_serialize(struct Parameter* rpcparam, size_t* nserialized)
                     if (write) { value[written] = '\''; }
                     ++written;
 
-                    for (ixsrc = 0; ixsrc < MIN((size_t)rpcparam->tdstypesize, rpcparam->ninput); ++ixsrc)
+                    for (ixsrc = 0; ixsrc < rpcparam->ninput; ++ixsrc)
                     {
                         switch (input[ixsrc])
                         {
@@ -979,7 +1028,7 @@ char* Parameter_serialize(struct Parameter* rpcparam, size_t* nserialized)
                 size_t ix, written = 0;
 
                 /* Large enough for the hexadecimal representation. */
-                value = (char*)tds_mem_malloc(ARRAYSIZE("0x") + rpcparam->ninput * 2 + 1 /* '\0' */);
+                value = tds_mem_malloc(ARRAYSIZE("0x") + rpcparam->ninput * 2 + 1 /* '\0' */);
                 if (!value)
                 {
                     PyErr_NoMemory();
@@ -1030,7 +1079,7 @@ char* Parameter_serialize(struct Parameter* rpcparam, size_t* nserialized)
                     }
                 }
 
-                value = (char*)tds_mem_malloc(nvalue);
+                value = tds_mem_malloc(nvalue);
                 if (!value)
                 {
                     PyErr_NoMemory();
@@ -1073,7 +1122,7 @@ char* Parameter_serialize(struct Parameter* rpcparam, size_t* nserialized)
                 } ints;
                 memset(&ints, 0, sizeof(ints));
 
-                value = (char*)tds_mem_malloc(ARRAYSIZE("-9223372036854775808"));
+                value = tds_mem_malloc(ARRAYSIZE("-9223372036854775808"));
                 if (!value)
                 {
                     PyErr_NoMemory();
@@ -1110,10 +1159,10 @@ char* Parameter_serialize(struct Parameter* rpcparam, size_t* nserialized)
     {
         if (convert)
         {
-            char* type = Parameter_sqltype(rpcparam);
+            char* type = Parameter_sqltype(rpcparam, maximum_width);
             if (type)
             {
-                serialized = (char*)tds_mem_malloc(
+                serialized = tds_mem_malloc(
                     ARRAYSIZE("CONVERT(") + strlen(type) + ARRAYSIZE(",") + strlen(value) + ARRAYSIZE(")")
                 );
                 if (serialized)

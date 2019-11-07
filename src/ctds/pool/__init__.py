@@ -7,7 +7,7 @@ import warnings
 PooledConnection = namedtuple('PooledConnection', ['connection', 'released'])
 
 
-class ConnectionPool(object): # pylint: disable=too-many-instance-attributes
+class ConnectionPool(object): # pylint: disable=too-many-instance-attributes,useless-object-inheritance
     '''
     A basic connection pool for DB-API 2.0-compliant database drivers.
 
@@ -112,8 +112,10 @@ class ConnectionPool(object): # pylint: disable=too-many-instance-attributes
 
         '''
         connection = self.acquire()
-        yield connection
-        self.release(connection)
+        try:
+            yield connection
+        finally:
+            self.release(connection)
 
     def acquire(self):
         '''

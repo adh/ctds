@@ -81,6 +81,9 @@ static const char s_tds_doc[] =
 #ifndef DEFAULT_READ_ONLY
 #  define DEFAULT_READ_ONLY 0
 #endif
+#ifndef DEFAULT_NTLMV2
+#  define DEFAULT_NTLMV2 0
+#endif
 
 #if DEFAULT_AUTOCOMMIT
 #  define DEFAULT_AUTOCOMMIT_STR "True"
@@ -106,6 +109,12 @@ static const char s_tds_doc[] =
 #  define DEFAULT_READ_ONLY_STR "False"
 #endif
 
+#if DEFAULT_NTLMV2
+#  define DEFAULT_NTLMV2_STR "True"
+#else
+#  define DEFAULT_NTLMV2_STR "False"
+#endif
+
 #define CTDS_DEFAULT_PARAMSTYLE "numeric"
 
 
@@ -117,6 +126,7 @@ static const char s_tds_connect_doc[] =
             "password='" DEFAULT_PASSWORD "', "
             "database=None, "
             "appname='" DEFAULT_APPNAME "', "
+            "hostname=None, "
             "login_timeout=" STRINGIFY(DEFAULT_LOGIN_TIMEOUT) ", "
             "timeout=" STRINGIFY(DEFAULT_LOGIN_TIMEOUT) ", "
             "tds_version=None, "
@@ -124,7 +134,8 @@ static const char s_tds_connect_doc[] =
             "ansi_defaults=" DEFAULT_ANSI_DEFAULTS_STR ", "
             "enable_bcp=" DEFAULT_ENABLE_BCP_STR ", "
             "paramstyle=None, "
-            "read_only=" DEFAULT_READ_ONLY_STR ")\n"
+            "read_only=" DEFAULT_READ_ONLY_STR ", "
+            "ntlmv2=" DEFAULT_NTLMV2_STR ")\n"
     "\n"
     "Connect to a database.\n"
     "\n"
@@ -137,6 +148,15 @@ static const char s_tds_connect_doc[] =
     "\n"
     ".. versionadded:: 1.6\n"
     "    `paramstyle`\n"
+    "\n"
+    ".. versionadded:: 1.6\n"
+    "    `read_only`\n"
+    "\n"
+    ".. versionadded:: 1.8\n"
+    "    `hostname`\n"
+    "\n"
+    ".. versionadded:: 1.8\n"
+    "    `ntlmv2`\n"
     "\n"
     ":param str server: The database server host.\n"
 
@@ -153,6 +173,9 @@ static const char s_tds_connect_doc[] =
 
     ":param str appname: An optional application name to associate with\n"
     "    the connection.\n"
+
+    ":param str hostname: An optional client host name to associate with\n"
+    "    the connection instead of the local device hostname.\n"
 
     ":param int login_timeout: An optional login timeout, in seconds.\n"
 
@@ -176,6 +199,8 @@ static const char s_tds_connect_doc[] =
 
     ":param bool read_only: Indicate 'read-only' application intent.\n"
 
+    ":param bool ntlmv2: Enable NTLMv2 authentication.\n"
+
     ":return: A new `Connection` object connected to the database.\n"
     ":rtype: Connection\n";
 
@@ -193,6 +218,7 @@ static PyObject* tds_connect(PyObject* self, PyObject* args, PyObject* kwargs)
         "password",
         "database",
         "appname",
+        "hostname",
         "login_timeout",
         "timeout",
         "tds_version",
@@ -201,6 +227,7 @@ static PyObject* tds_connect(PyObject* self, PyObject* args, PyObject* kwargs)
         "enable_bcp",
         "paramstyle",
         "read_only",
+        "ntlmv2",
         NULL
     };
 
@@ -222,6 +249,7 @@ static PyObject* tds_connect(PyObject* self, PyObject* args, PyObject* kwargs)
     char* password = DEFAULT_PASSWORD;
     char* database = NULL;
     char* appname = DEFAULT_APPNAME;
+    char* hostname = NULL;
     unsigned int login_timeout = DEFAULT_LOGIN_TIMEOUT;
     unsigned int timeout = DEFAULT_TIMEOUT;
     char* tds_version = NULL;
@@ -229,15 +257,18 @@ static PyObject* tds_connect(PyObject* self, PyObject* args, PyObject* kwargs)
     PyObject* ansi_defaults = (DEFAULT_ANSI_DEFAULTS) ? Py_True : Py_False;
     PyObject* enable_bcp = (DEFAULT_ENABLE_BCP) ? Py_True : Py_False;
     PyObject* read_only = (DEFAULT_READ_ONLY) ? Py_True : Py_False;
+    PyObject* ntlmv2 = (DEFAULT_NTLMV2) ? Py_True : Py_False;
     char* paramstyle_str = CTDS_DEFAULT_PARAMSTYLE;
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|HzzzzzIIzO!O!O!zO!", s_kwlist, &server,
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|HzzzzzzIIzO!O!O!zO!O!", s_kwlist, &server,
                                      &port, &instance, &username, &password,
-                                     &database, &appname, &login_timeout,
-                                     &timeout, &tds_version, &PyBool_Type, &autocommit,
+                                     &database, &appname, &hostname,
+                                     &login_timeout, &timeout, &tds_version,
+                                     &PyBool_Type, &autocommit,
                                      &PyBool_Type, &ansi_defaults,
                                      &PyBool_Type, &enable_bcp,
                                      &paramstyle_str,
-                                     &PyBool_Type, &read_only))
+                                     &PyBool_Type, &read_only,
+                                     &PyBool_Type, &ntlmv2))
     {
         return NULL;
     }
@@ -247,12 +278,14 @@ static PyObject* tds_connect(PyObject* self, PyObject* args, PyObject* kwargs)
         if (0 == strcmp(paramstyle_str, s_paramstyles[ix].serialized))
         {
             return Connection_create(server, port, instance, username, password,
-                                     database, appname, login_timeout, timeout,
+                                     database, appname, hostname,
+                                     login_timeout, timeout,
                                      tds_version, (Py_True == autocommit),
                                      (Py_True == ansi_defaults),
                                      (Py_True == enable_bcp),
                                      s_paramstyles[ix].paramstyle,
-                                     (Py_True == read_only));
+                                     (Py_True == read_only),
+                                     (Py_True == ntlmv2));
         }
     }
 

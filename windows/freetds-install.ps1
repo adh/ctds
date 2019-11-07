@@ -1,5 +1,8 @@
 $ErrorActionPreference = "Stop"
 
+# Explicitly enable modern versions of TLS.
+[Net.ServicePointManager]::SecurityProtocol = "tls12, tls11, tls"
+
 Function MSVC-Env-Invoke([string] $command)
 {
     $command = "$env:COMSPEC /E:ON /V:ON /C $PSScriptRoot\run_with_msvc.cmd " + $command
@@ -100,7 +103,7 @@ if (Test-Path env:FREETDS_VERSION)
 }
 else
 {
-    $freetds_version = "1.00.63"
+    $freetds_version = "1.00.80"
     Write-Verbose "FREETDS_VERSION not set; defaulting to $freetds_version"
 }
 

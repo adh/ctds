@@ -43,7 +43,7 @@
           _type* value = ((_type*)pthread_getspecific(tls_ ## _name)); \
           if (!value) \
           { \
-              value = (_type*)tds_mem_malloc(sizeof(_type)); \
+              value = tds_mem_malloc(sizeof(_type)); \
               if (value) \
               { \
                   if (0 == pthread_setspecific(tls_ ## _name, value)) \
@@ -86,7 +86,7 @@
           _type* value = ((_type*)TlsGetValue(tls_ ## _name)); \
           if (!value && (ERROR_SUCCESS == GetLastError())) \
           { \
-              value = (_type*)tds_mem_malloc(sizeof(_type)); \
+              value = tds_mem_malloc(sizeof(_type)); \
               if (value) \
               { \
                   if (TlsSetValue(tls_ ## _name, (LPVOID)value)) \
@@ -1378,6 +1378,8 @@ static const char s_Connection_bulk_insert_doc[] =
     ":param rows: An iterable of data rows. Data rows are Python `sequence`\n"
     "    objects. Each item in the data row is inserted into the table in\n"
     "    sequential order.\n"
+    "    Version 1.9 supports passing rows as `:py:class:`dict`. Keys must map\n"
+    "    to column names and must exist for all non-NULL columns.\n"
     ":type rows: :ref:`typeiter <python:typeiter>`\n"
 
     ":param int batch_size: An optional batch size.\n"
@@ -1400,7 +1402,7 @@ static DBINT Connection_bulk_insert_sendrow(struct Connection* connection,
     {
         RETCODE retcode;
 
-        rpcparams = (struct Parameter**)tds_mem_calloc((size_t)size, sizeof(struct Parameter*));
+        rpcparams = tds_mem_calloc((size_t)size, sizeof(struct Parameter*));
         if (!rpcparams)
         {
             PyErr_NoMemory();
@@ -1412,7 +1414,7 @@ static DBINT Connection_bulk_insert_sendrow(struct Connection* connection,
             PyObject* value = PySequence_Fast_GET_ITEM(sequence, ix);
             if (!Parameter_Check(value))
             {
-                rpcparams[ix] = Parameter_create(value, 0 /* output */);
+                rpcparams[ix] = Parameter_create(value, false /* output */);
                 if (!rpcparams[ix])
                 {
                     break;
@@ -1592,50 +1594,145 @@ static PyObject* Connection_bulk_insert(PyObject* self, PyObject* args, PyObject
             RETCODE retcode;
             size_t sent = 0;
 
-            DBINT processed;
+            DBINT processed = 0;
 
-            Py_BEGIN_ALLOW_THREADS
-
-                do
-                {
-                    retcode = bcp_init(connection->dbproc, table, NULL, NULL, DB_IN);
-                    if (FAIL == retcode)
-                    {
-                        break;
-                    }
-
-                    if (Py_True == tablock)
-                    {
-                        static const char s_TABLOCK[] = "TABLOCK";
-                        retcode = bcp_options(connection->dbproc,
-                                              BCPHINTS,
-                                              (BYTE*)s_TABLOCK,
-                                              ARRAYSIZE(s_TABLOCK));
-                        if (FAIL == retcode)
-                        {
-                            break;
-                        }
-                    }
-                }
-                while (0);
-
-            Py_END_ALLOW_THREADS
-
-            if (FAIL == retcode)
-            {
-                Connection_raise_lasterror(connection);
-                break;
-            }
+            DBINT ncolumns = 0;
+            struct {
+                bool nullable;
+                char* name;
+            }* columns = NULL;
+            bool initialized = false;
 
             while (NULL != (row = PyIter_Next(irows)))
             {
 #define INVALID_SEQUENCE_FMT "invalid sequence for row %zd"
-                PyObject* sequence;
+                PyObject* sequence = NULL;
 
                 char msg[ARRAYSIZE(INVALID_SEQUENCE_FMT) + ARRAYSIZE(STRINGIFY(UINT64_MAX))];
-                (void)sprintf(msg, INVALID_SEQUENCE_FMT, sent);
 
-                sequence = PySequence_Fast(row, msg);
+                /* Initialize only if there are rows to send. */
+                if (!initialized)
+                {
+                    size_t column;
+
+                    Py_BEGIN_ALLOW_THREADS
+
+                        do
+                        {
+                            retcode = bcp_init(connection->dbproc, table, NULL, NULL, DB_IN);
+                            if (FAIL == retcode)
+                            {
+                                break;
+                            }
+
+                            initialized = true;
+
+                            if (Py_True == tablock)
+                            {
+                                static const char s_TABLOCK[] = "TABLOCK";
+                                retcode = bcp_options(connection->dbproc,
+                                                      BCPHINTS,
+                                                      (BYTE*)s_TABLOCK,
+                                                      ARRAYSIZE(s_TABLOCK));
+                                if (FAIL == retcode)
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                        while (0);
+
+                    Py_END_ALLOW_THREADS
+
+                    if (FAIL == retcode)
+                    {
+                        Connection_raise_lasterror(connection);
+                        break;
+                    }
+
+                    /*
+                        Store an ordered list of table column names. Once
+                        insertion starts this information won't be available.
+                    */
+                    ncolumns = dbnumcols(connection->dbproc);
+                    assert(ncolumns > 0);
+                    columns = tds_mem_calloc((size_t)ncolumns, sizeof(*columns));
+                    if (!columns)
+                    {
+                        PyErr_NoMemory();
+                        break;
+                    }
+
+                    for (column = 0; column < (size_t)ncolumns; ++column)
+                    {
+                        DBCOL dbcol;
+                        retcode = dbcolinfo(connection->dbproc, CI_REGULAR, (DBINT)column + 1, 0 /* ignored by dblib */,
+                                            &dbcol);
+                        if (FAIL == retcode)
+                        {
+                            Connection_raise_lasterror(connection);
+                            break;
+                        }
+
+                        columns[column].nullable = dbcol.Null;
+                        columns[column].name = tds_mem_strdup(dbcol.ActualName);
+                        if (!columns[column].name)
+                        {
+                            PyErr_NoMemory();
+                            break;
+                        }
+                    }
+
+                    if (PyErr_Occurred())
+                    {
+                        break;
+                    }
+                }
+
+                if (PyMapping_Check(row) && !PySequence_Check(row))
+                {
+                    PyObject* tuple = PyTuple_New((Py_ssize_t)ncolumns);
+                    if (tuple)
+                    {
+                        /* Construct the sequence based on the column info. */
+                        size_t column;
+                        for (column = 0; column < (size_t)ncolumns; ++column)
+                        {
+                            /* Retrieve the value by name from the row. */
+                            PyObject* value = PyMapping_GetItemString(row, columns[column].name);
+                            if (!value)
+                            {
+                                if (columns[column].nullable)
+                                {
+                                    PyErr_Clear();
+                                    value = Py_None;
+                                    Py_INCREF(value);
+                                }
+                                else
+                                {
+                                    assert(PyErr_Occurred()); /* set by PyMapping_GetItemString */
+                                    break;
+                                }
+                            }
+
+                            PyTuple_SET_ITEM(tuple, (Py_ssize_t)column, value);
+                            /* value reference stolen by PyTuple_SET_ITEM */
+                        }
+
+                        if (!PyErr_Occurred())
+                        {
+                            sequence = PySequence_Fast(tuple, "internal error");
+                        }
+
+                        Py_DECREF(tuple);
+                    }
+                }
+                else
+                {
+                    (void)sprintf(msg, INVALID_SEQUENCE_FMT, sent);
+                    sequence = PySequence_Fast(row, msg);
+                }
+
                 if (sequence)
                 {
                     bool send_batch = ((0 != batches) && ((sent + 1) % batches == 0));
@@ -1654,14 +1751,27 @@ static PyObject* Connection_bulk_insert(PyObject* self, PyObject* args, PyObject
                 }
 
                 sent++;
+            } /* while (NULL != (row = PyIter_Next(irows))) */
+
+            if (columns)
+            {
+                size_t column;
+                for (column = 0; column < (size_t)ncolumns; ++column)
+                {
+                    tds_mem_free(columns[column].name);
+                }
+                tds_mem_free(columns);
             }
 
-            /* Always call bcp_done() regardless of previous errors. */
-            Py_BEGIN_ALLOW_THREADS
+            if (initialized)
+            {
+                /* Always call bcp_done() regardless of previous errors. */
+                Py_BEGIN_ALLOW_THREADS
 
-                processed = bcp_done(connection->dbproc);
+                    processed = bcp_done(connection->dbproc);
 
-            Py_END_ALLOW_THREADS
+                Py_END_ALLOW_THREADS
+            }
 
             if (-1 != processed)
             {
@@ -1794,12 +1904,12 @@ static PyMethodDef Connection_methods[] = {
 
 PyObject* Connection_create(const char* server, uint16_t port, const char* instance,
                             const char* username, const char* password,
-                            const char* database, const char* appname,
+                            const char* database, const char* appname, const char* hostname,
                             unsigned int login_timeout, unsigned int timeout,
                             const char* tds_version, bool autocommit,
                             bool ansi_defaults, bool enable_bcp,
                             enum ParamStyle paramstyle,
-                            bool read_only)
+                            bool read_only, bool ntlmv2)
 {
     struct Connection* connection = PyObject_New(struct Connection, &ConnectionType);
     if (NULL != connection)
@@ -1863,7 +1973,7 @@ PyObject* Connection_create(const char* server, uint16_t port, const char* insta
                 ((instance) ? strlen(instance) : STRLEN(STRINGIFY(UINT16_MAX)) /* maximum port number length */) +
                 1 /* for '\0' */;
 
-            servername = (char*)tds_mem_malloc(nservername);
+            servername = tds_mem_malloc(nservername);
             if (!servername)
             {
                 PyErr_NoMemory();
@@ -1932,6 +2042,28 @@ PyObject* Connection_create(const char* server, uint16_t port, const char* insta
                     PyErr_SetString(PyExc_tds_InterfaceError, appname);
                     break;
                 }
+            }
+            if (hostname)
+            {
+                if (FAIL == DBSETLHOST(connection->login, hostname))
+                {
+                    PyErr_SetString(PyExc_tds_InterfaceError, hostname);
+                    break;
+                }
+            }
+
+            if (ntlmv2)
+            {
+#if defined(CTDS_HAVE_NTLMV2)
+                if (FAIL == DBSETLNTLMV2(connection->login, (int)ntlmv2))
+                {
+                    PyErr_SetString(PyExc_RuntimeError, "failed to set NTLMv2");
+                    break;
+                }
+#else /* if defined(CTDS_HAVE_NTLMV2) */
+                PyErr_Format(PyExc_NotImplementedError, "NTLMv2 is not supported");
+                break;
+#endif /* else if defined(CTDS_HAVE_NTLMV2) */
             }
 
             if (tds_version)

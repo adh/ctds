@@ -206,19 +206,21 @@ sql_topython sql_topython_lookup(enum TdsType tdstype);
 
     @return The Python string object which owns the buffer `utf8bytes`.
 */
-PyObject* encode_for_dblib(PyObject* unicode, char** utf8bytes, size_t* nutf8bytes, size_t* width);
+PyObject* encode_for_dblib(PyObject* unicode, const char** utf8bytes, size_t* nutf8bytes, size_t* width);
 
 /**
     Convert a Python datetime, date or time to a DBDATETIME.
 
     @note: This will silently discard the microsecond precision for Python's
-    `time` and `datetime` objects.
+    `time` and `datetime` objects if not supported by FreeTDS.
 
     @param o [in] The date, datetime or time object.
-    @param dbdatetime [out] The converted value.
+    @param tdstype [out] The TDS type of the convert value.
+    @param converted [out] The converted value.
+    @param cbconverted [in] The size of buffer, in bytes.
 
-    @retval 0 on success, -1 on error.
+    @retval bytes written to `converted` on success, -1 on error.
 */
-int datetime_to_sql(PyObject* o, DBDATETIME* dbdatetime);
+int datetime_to_sql(PyObject* o, enum TdsType* tdstype, void* converted, size_t cbconverted);
 
 #endif /* ifndef __TYPE_H__ */

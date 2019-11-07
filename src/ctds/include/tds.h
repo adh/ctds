@@ -30,6 +30,8 @@ extern PyObject* PyExc_tds_NotSupportedError;
 #define TDS_NCHAR_MIN_SIZE 1
 #define TDS_NCHAR_MAX_SIZE 4000
 
+#define TDS_BINARY_MAX_SIZE 8000
+
 enum ParamStyle {
     ParamStyle_named,
     ParamStyle_numeric
@@ -50,6 +52,14 @@ enum ParamStyle {
 #  define CTDS_HAVE_READONLY_INTENT 1
 #endif
 
+#if defined(DBSETNTLMV2)
+#  define CTDS_HAVE_NTLMV2 1
+#endif
+
+#if defined(SYBMSTIME)
+#  define CTDS_HAVE_TDSTIME 1
+#endif
+
 /*
     Use `sp_executesql` when possible for the execute*() methods. This method
     won't work on older versions of FreeTDS which don't properly support passing
@@ -63,6 +73,7 @@ enum ParamStyle {
 #if defined(DATETIME2BIND)
 #  define CTDS_USE_SP_EXECUTESQL 1
 #  define CTDS_USE_NCHARS 1
+#  define CTDS_SUPPORT_BCP_EMPTY_STRING 1
 #endif
 
 #endif /* ifndef __TDS_H__ */

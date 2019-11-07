@@ -7,7 +7,7 @@ import ctds
 from .base import TestExternalDatabase
 from .compat import PY3, long_, unicode_
 
-class TestCursorExecuteMany(TestExternalDatabase):
+class TestCursorExecuteMany(TestExternalDatabase): # pylint: disable=too-many-public-methods
     '''Unit tests related to the Cursor.executemany() method.
     '''
 
@@ -372,10 +372,10 @@ against all parameter sequences or mappings found in the sequence
         with self.connect(paramstyle='named') as connection:
             with connection.cursor() as cursor:
                 for arg in (
-                    None,
-                    object(),
-                    1,
-                    Decimal('1.0'),
+                        None,
+                        object(),
+                        1,
+                        Decimal('1.0'),
                 ):
                     args = {
                         arg: 'value',
@@ -396,7 +396,13 @@ against all parameter sequences or mappings found in the sequence
 
     def test_compute(self):
         # COMPUTE clauses are only supported in SQL Server 2005 & 2008
-        if self.sql_server_version()[0] < 11: # pragma: nocover
+        version = self.sql_server_version()
+        if version[0] > 10:
+            version = '.'.join(str(part) for part in version)
+            self.skipTest(
+                'SQL Server {0} does not support compute columns'.format(version)
+            )
+        else: # pragma: nocover
             with self.connect() as connection:
                 with connection.cursor() as cursor:
                     cursor.executemany(
@@ -555,6 +561,59 @@ against all parameter sequences or mappings found in the sequence
                         '''
                         SET IDENTITY_INSERT {0} OFF;
                         '''.format(self.test_identity_insert.__name__)
+                    )
+            finally:
+                connection.rollback()
+
+    def test_variable_width_columns(self):
+        with self.connect(autocommit=False, paramstyle='named') as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        '''
+                        CREATE TABLE {0} (
+                            [varchar] VARCHAR(MAX),
+                            [nvarchar] NVARCHAR(MAX),
+                            [varbinary] VARBINARY(MAX),
+                            [int] BIGINT
+                        );
+                        '''.format(self.test_variable_width_columns.__name__)
+                    )
+                    cursor.executemany(
+                        '''
+                        INSERT INTO
+                            {0}([varchar], [nvarchar], [varbinary], [int])
+                        VALUES (
+                            :varchar, :nvarchar, :varbinary, :int
+                        );
+                        '''.format(self.test_variable_width_columns.__name__),
+                        (
+                            {
+                                'varchar': unicode_('v' * (ix + 1)),
+                                'nvarchar': unicode_('n' * (ix + 1)),
+                                'varbinary': b'b' * (ix + 1),
+                                'int': 8 ** ix,
+                            }
+                            for ix in range(10)
+                        )
+                    )
+                    cursor.execute(
+                        '''
+                        SELECT * FROM {0}
+                        '''.format(self.test_variable_width_columns.__name__)
+                    )
+
+                    self.assertEqual(
+                        [tuple(row) for row in cursor.fetchall()],
+                        [
+                            (
+                                unicode_('v' * (ix + 1)),
+                                unicode_('n' * (ix + 1)),
+                                b'b' * (ix + 1),
+                                8 ** ix,
+                            )
+                            for ix in range(10)
+                        ]
                     )
             finally:
                 connection.rollback()

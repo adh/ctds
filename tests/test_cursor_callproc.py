@@ -1,4 +1,5 @@
-from datetime import datetime
+import contextlib
+from datetime import date, datetime, time
 from decimal import Decimal
 import uuid
 import warnings
@@ -14,26 +15,26 @@ class TestCursorCallproc(TestExternalDatabase): # pylint: disable=too-many-publi
 
     @staticmethod
     def stored_procedure(cursor, sproc, body, args=()):
-        class StoredProcedureContext(object): # pylint: disable=too-few-public-methods
-            def __enter__(self):
-                cursor.execute(
-                    '''
-                    IF EXISTS (
-                        SELECT 1
-                        FROM sys.objects
-                        WHERE object_id = OBJECT_ID(N'{0}')
-                    )
-                    BEGIN
-                        DROP PROCEDURE {0};
-                    END
-                    '''.format(sproc)
+
+        @contextlib.contextmanager
+        def stored_procedure_context():
+            cursor.execute(
+                '''
+                IF EXISTS (
+                    SELECT 1
+                    FROM sys.objects
+                    WHERE object_id = OBJECT_ID(N'{0}')
                 )
-                cursor.execute('CREATE PROCEDURE {0}\n{1}'.format(sproc, body), args)
+                BEGIN
+                    DROP PROCEDURE {0};
+                END
+                '''.format(sproc)
+            )
+            cursor.execute('CREATE PROCEDURE {0}\n{1}'.format(sproc, body), args)
+            yield
+            cursor.execute('DROP PROCEDURE {0}'.format(sproc))
 
-            def __exit__(self, exc_type, exc_value, traceback):
-                cursor.execute('DROP PROCEDURE {0}'.format(sproc))
-
-        return StoredProcedureContext()
+        return stored_procedure_context()
 
     def test___doc__(self):
         self.assertEqual(
@@ -103,13 +104,13 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_sql_exception.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                    AS
-                        RAISERROR (N'some custom error %s', 12, 111, 'hello!');
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                        AS
+                            RAISERROR (N'some custom error %s', 12, 111, 'hello!');
+                        '''
+                ):
                     try:
                         cursor.callproc(sproc, ())
                     except ctds.ProgrammingError as ex:
@@ -140,14 +141,14 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_sql_raiseerror_warning.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                    AS
-                        RAISERROR (N'some custom error %s', 16, -1, 'hello!');
-                        SELECT 1 As SomeResult
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                        AS
+                            RAISERROR (N'some custom error %s', 16, -1, 'hello!');
+                            SELECT 1 As SomeResult
+                        '''
+                ):
                     with warnings.catch_warnings(record=True) as warns:
                         cursor.callproc(sproc, ())
                         msg = unicode_('some custom error hello!')
@@ -195,14 +196,14 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_warning_as_error.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                    AS
-                        RAISERROR (N'some custom error %s', 16, -1, 'hello!');
-                        SELECT 1 As SomeResult
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                        AS
+                            RAISERROR (N'some custom error %s', 16, -1, 'hello!');
+                            SELECT 1 As SomeResult
+                        '''
+                ):
                     with warnings.catch_warnings():
                         warnings.simplefilter('error', ctds.Warning)
                         try:
@@ -223,14 +224,14 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_sql_print.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pMsg VARCHAR(MAX)
-                    AS
-                        PRINT(@pMsg);
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pMsg VARCHAR(MAX)
+                        AS
+                            PRINT(@pMsg);
+                        '''
+                ):
                     msg = unicode_('hello world!')
                     with warnings.catch_warnings(record=True) as warns:
                         cursor.callproc(sproc, (msg,))
@@ -263,14 +264,14 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_dataerror.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pInt TINYINT OUTPUT
-                    AS
-                        SELECT @pInt = @pInt * 255;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pInt TINYINT OUTPUT
+                        AS
+                            SELECT @pInt = @pInt * 255;
+                        '''
+                ):
                     try:
                         cursor.callproc(sproc, (256,))
                     except ctds.DataError as ex:
@@ -301,16 +302,16 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_sql_conversion_warning.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pInt TINYINT OUTPUT,
-                        @pBigInt BIGINT OUTPUT
-                    AS
-                        SELECT @pInt = @pInt * 255;
-                        SELECT @pBigInt = @pBigInt - 1000;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pInt TINYINT OUTPUT,
+                            @pBigInt BIGINT OUTPUT
+                        AS
+                            SELECT @pInt = @pInt * 255;
+                            SELECT @pBigInt = @pBigInt - 1000;
+                        '''
+                ):
                     with warnings.catch_warnings(record=True) as warns:
                         inputs = (
                             ctds.Parameter(10, output=True),
@@ -334,16 +335,16 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_sql_conversion_warning_as_error.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pInt TINYINT OUTPUT,
-                        @pBigInt BIGINT OUTPUT
-                    AS
-                        SELECT @pInt = @pInt * 255;
-                        SELECT @pBigInt = @pBigInt - 1000;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pInt TINYINT OUTPUT,
+                            @pBigInt BIGINT OUTPUT
+                        AS
+                            SELECT @pInt = @pInt * 255;
+                            SELECT @pBigInt = @pBigInt - 1000;
+                        '''
+                ):
                     with warnings.catch_warnings():
                         warnings.simplefilter('error', ctds.Warning)
                         inputs = (
@@ -362,16 +363,16 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_sql_conversion_warning.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pInt TINYINT OUTPUT,
-                        @pBigInt BIGINT OUTPUT
-                    AS
-                        SELECT @pInt = @pInt * 255;
-                        SELECT @pBigInt = @pBigInt - 1000;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pInt TINYINT OUTPUT,
+                            @pBigInt BIGINT OUTPUT
+                        AS
+                            SELECT @pInt = @pInt * 255;
+                            SELECT @pBigInt = @pBigInt - 1000;
+                        '''
+                ):
                     inputs = (
                         ctds.Parameter(10, output=True),
                         ctds.Parameter(1234, output=True),
@@ -391,15 +392,15 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_output_with_resultset.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pOut INT OUTPUT
-                    AS
-                        SET @pOut = 5;
-                        SELECT 10;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pOut INT OUTPUT
+                        AS
+                            SET @pOut = 5;
+                            SELECT 10;
+                        '''
+                ):
                     with warnings.catch_warnings(record=True) as warns:
                         cursor.callproc(sproc, (ctds.Parameter(ctds.SqlInt(0), output=True),))
                         cursor.callproc(sproc, {'@pOut': ctds.Parameter(ctds.SqlInt(0), output=True)})
@@ -418,15 +419,15 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_output_with_resultset_as_error.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pOut INT OUTPUT
-                    AS
-                        SET @pOut = 5;
-                        SELECT 10;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pOut INT OUTPUT
+                        AS
+                            SET @pOut = 5;
+                            SELECT 10;
+                        '''
+                ):
                     with warnings.catch_warnings():
                         warnings.simplefilter('error')
                         try:
@@ -441,13 +442,13 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_dict_invalid_name.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pParameter BIGINT
-                    AS
-                        SELECT @pParameter;
-                    '''
+                        cursor,
+                        sproc,
+                        '''
+                            @pParameter BIGINT
+                        AS
+                            SELECT @pParameter;
+                        '''
                 ):
                     for case in ('pParameter', 1, '1', None, ''):
                         try:
@@ -465,23 +466,23 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_dict.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pBigInt BIGINT,
-                        @pVarChar VARCHAR(32),
-                        @pVarBinary VARBINARY(32),
-                        @pDateTime DATETIME,
-                        @pDecimal DECIMAL(32, 20)
-                    AS
-                        SELECT
-                            @pDecimal AS Decimal,
-                            @pVarBinary AS VarBinary,
-                            @pVarChar AS VarChar,
-                            @pBigInt AS BigInt,
-                            @pDateTime AS DateTime;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pBigInt BIGINT,
+                            @pVarChar VARCHAR(32),
+                            @pVarBinary VARBINARY(32),
+                            @pDateTime DATETIME,
+                            @pDecimal DECIMAL(32, 20)
+                        AS
+                            SELECT
+                                @pDecimal AS Decimal,
+                                @pVarBinary AS VarBinary,
+                                @pVarChar AS VarChar,
+                                @pBigInt AS BigInt,
+                                @pDateTime AS DateTime;
+                        '''
+                ):
                     types = [str]
                     if not PY3: # pragma: nocover
                         types.append(unicode_)
@@ -520,23 +521,32 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_dict.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pBigInt BIGINT OUTPUT,
-                        @pVarChar VARCHAR(32) OUTPUT,
-                        @pVarBinary VARBINARY(32) OUTPUT,
-                        @pFloat FLOAT OUTPUT,
-                        @pDateTime DATETIME,
-                        @pDateTimeOut DATETIME OUTPUT
-                    AS
-                        SET @pBigInt = @pBigInt * 2;
-                        SET @pVarBinary = CONVERT(VARBINARY(32), @pVarChar);
-                        SET @pVarChar = CONVERT(VARCHAR(32), @pDateTime, 120);
-                        SET @pFloat = @pFloat * 2.1;
-                        SET @pDateTimeOut = CONVERT(DATETIME, '2017-01-01 01:02:03');
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pBigInt BIGINT OUTPUT,
+                            @pVarChar VARCHAR(32) OUTPUT,
+                            @pVarBinary VARBINARY(32) OUTPUT,
+                            @pFloat FLOAT OUTPUT,
+                            @pDateTime DATETIME,
+                            @pDateTimeOut DATETIME OUTPUT,
+                            @pDateTime2 DATETIME2,
+                            @pDateTime2Out DATETIME2 OUTPUT,
+                            @pDate DATE,
+                            @pDateOut DATE OUTPUT,
+                            @pTime TIME,
+                            @pTimeOut TIME OUTPUT
+                        AS
+                            SET @pBigInt = @pBigInt * 2;
+                            SET @pVarBinary = CONVERT(VARBINARY(32), @pVarChar);
+                            SET @pVarChar = CONVERT(VARCHAR(32), @pDateTime, 120);
+                            SET @pFloat = @pFloat * 2.1;
+                            SET @pDateTimeOut = CONVERT(DATETIME, '2016-02-03 04:05:06.783');
+                            SET @pDateTime2Out = CONVERT(DATETIME2, '2017-01-01 01:02:03.1234567');
+                            SET @pDateOut = CONVERT(DATE, '2017-01-01');
+                            SET @pTimeOut = CONVERT(TIME, '01:02:03.1234567');
+                        '''
+                ):
                     types = [str]
                     if not PY3: # pragma: nocover
                         types.append(unicode_)
@@ -550,13 +560,22 @@ parameters are replaced with output values.
                             type_('@pVarBinary'): ctds.Parameter(ctds.SqlVarBinary(None, size=32), output=True),
                             type_('@pFloat'): ctds.Parameter(1.23, output=True),
                             type_('@pDateTime'): datetime(2011, 11, 5, 12, 12, 12),
-                            type_('@pDateTimeOut'): ctds.Parameter(datetime.utcnow(), output=True),
+                            type_('@pDateTimeOut'): ctds.Parameter(datetime(2011, 11, 5, 12, 12, 12), output=True),
+                            type_('@pDateTime2'): datetime(2011, 11, 5, 12, 12, 12, 999999),
+                            type_('@pDateTime2Out'): ctds.Parameter(datetime.utcnow(), output=True),
+                            type_('@pDate'): date(2011, 11, 5),
+                            type_('@pDateOut'): ctds.Parameter(date.today(), output=True),
+                            type_('@pTime'): time(12, 12, 12, 123456),
+                            type_('@pTimeOut'): ctds.Parameter(datetime.utcnow().time(), output=True),
                         }
                         outputs = cursor.callproc(sproc, inputs)
                         self.assertNotEqual(id(outputs[type_('@pBigInt')]), id(inputs[type_('@pBigInt')]))
                         self.assertNotEqual(id(outputs[type_('@pVarChar')]), id(inputs[type_('@pVarChar')]))
                         self.assertNotEqual(id(outputs[type_('@pVarBinary')]), id(inputs[type_('@pVarBinary')]))
                         self.assertEqual(id(outputs[type_('@pDateTime')]), id(inputs[type_('@pDateTime')]))
+                        self.assertEqual(id(outputs[type_('@pDateTime2')]), id(inputs[type_('@pDateTime2')]))
+                        self.assertEqual(id(outputs[type_('@pDate')]), id(inputs[type_('@pDate')]))
+                        self.assertEqual(id(outputs[type_('@pTime')]), id(inputs[type_('@pTime')]))
 
                         self.assertEqual(
                             outputs[type_('@pBigInt')],
@@ -576,7 +595,27 @@ parameters are replaced with output values.
                         )
                         self.assertEqual(
                             outputs[type_('@pDateTimeOut')],
-                            datetime(2017, 1, 1, 1, 2, 3)
+                            datetime(2016, 2, 3, 4, 5, 6, 783000)
+                        )
+                        self.assertEqual(
+                            outputs[type_('@pDateTime2Out')],
+                            datetime(
+                                2017, 1, 1, 1, 2, 3,
+                                123456 if self.tdsdatetime2_supported else 123000
+                            )
+                        )
+                        self.assertEqual(
+                            outputs[type_('@pDateOut')],
+
+                            # $future: When passing TDSDATE to FreeTDS is
+                            # supported, this should be a `datetime.date`
+                            datetime(2017, 1, 1)
+                        )
+                        self.assertEqual(
+                            outputs[type_('@pTimeOut')],
+                            time(1, 2, 3, 123456)
+                            if self.tdstime_supported else
+                            datetime(1900, 1, 1, 1, 2, 3, 123000)
                         )
 
     def test_binary(self):
@@ -584,23 +623,23 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_binary.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pBinary BINARY(8),
-                        @pVarBinary VARBINARY(16),
+                        cursor,
+                        sproc,
+                        '''
+                            @pBinary BINARY(8),
+                            @pVarBinary VARBINARY(16),
 
-                        @pBinaryNone BINARY(1),
-                        @pVarBinaryNone VARBINARY(1)
-                    AS
-                        SELECT
-                            CONVERT(VARCHAR(32), @pBinary, 1),
-                            CONVERT(VARCHAR(32), @pVarBinary, 1),
+                            @pBinaryNone BINARY(1),
+                            @pVarBinaryNone VARBINARY(1)
+                        AS
+                            SELECT
+                                CONVERT(VARCHAR(32), @pBinary, 1),
+                                CONVERT(VARCHAR(32), @pVarBinary, 1),
 
-                            @pBinaryNone,
-                            @pVarBinaryNone
-                    '''
-                    ):
+                                @pBinaryNone,
+                                @pVarBinaryNone
+                        '''
+                ):
                     inputs = (
                         b'\x01\x02\x03\x04',
                         bytearray(b'\xde\xad\xbe\xef\xde\xad\xbe\xef'),
@@ -634,15 +673,15 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_binary_output.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pIn VARBINARY(8),
-                        @pOut VARBINARY(16) OUTPUT
-                    AS
-                        SET @pOut = @pIn + @pIn;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pIn VARBINARY(8),
+                            @pOut VARBINARY(16) OUTPUT
+                        AS
+                            SET @pOut = @pIn + @pIn;
+                        '''
+                ):
                     inputs = (
                         b'\x01\x02\x03\x04',
                         ctds.Parameter(ctds.SqlVarBinary(None, size=16), output=True)
@@ -671,14 +710,14 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_binary_inputoutput.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pInOut VARBINARY(16) OUTPUT
-                    AS
-                        SET @pInOut = @pInOut + @pInOut;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pInOut VARBINARY(16) OUTPUT
+                        AS
+                            SET @pInOut = @pInOut + @pInOut;
+                        '''
+                ):
                     value = b'\x01\x02\x03\x04'
                     inputs = (
                         ctds.Parameter(
@@ -695,25 +734,25 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_int.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pTinyInt TINYINT,
-                        @pSmallInt SMALLINT,
-                        @pInt INT,
-                        @pBigInt BIGINT,
+                        cursor,
+                        sproc,
+                        '''
+                            @pTinyInt TINYINT,
+                            @pSmallInt SMALLINT,
+                            @pInt INT,
+                            @pBigInt BIGINT,
 
-                        @pTinyIntOut TINYINT OUTPUT,
-                        @pSmallIntOut SMALLINT OUTPUT,
-                        @pIntOut INT OUTPUT,
-                        @pBigIntOut BIGINT OUTPUT
-                    AS
-                        SELECT @pTinyIntOut = @pTinyInt + 1;
-                        SELECT @pSmallIntOut = -1 * @pSmallInt;
-                        SELECT @pIntOut = -1 * @pInt;
-                        SELECT @pBigIntOut = -1 * @pBigInt;
-                    '''
-                    ):
+                            @pTinyIntOut TINYINT OUTPUT,
+                            @pSmallIntOut SMALLINT OUTPUT,
+                            @pIntOut INT OUTPUT,
+                            @pBigIntOut BIGINT OUTPUT
+                        AS
+                            SELECT @pTinyIntOut = @pTinyInt + 1;
+                            SELECT @pSmallIntOut = -1 * @pSmallInt;
+                            SELECT @pIntOut = -1 * @pInt;
+                            SELECT @pBigIntOut = -1 * @pBigInt;
+                        '''
+                ):
                     inputs = (
                         1,
                         2 ** 8,
@@ -746,27 +785,27 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_float.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pReal REAL,
-                        @pFloat24 FLOAT(24),
-                        @pFloat53 FLOAT(53),
+                        cursor,
+                        sproc,
+                        '''
+                            @pReal REAL,
+                            @pFloat24 FLOAT(24),
+                            @pFloat53 FLOAT(53),
 
-                        @pRealOut REAL OUTPUT,
-                        @pFloat24Out FLOAT(24) OUTPUT,
-                        @pFloat53Out FLOAT(53) OUTPUT
-                    AS
-                        SET @pRealOut = @pReal * 2;
-                        SET @pFloat24Out = @pFloat24 * 2;
-                        SET @pFloat53Out = @pFloat53 * 2;
+                            @pRealOut REAL OUTPUT,
+                            @pFloat24Out FLOAT(24) OUTPUT,
+                            @pFloat53Out FLOAT(53) OUTPUT
+                        AS
+                            SET @pRealOut = @pReal * 2;
+                            SET @pFloat24Out = @pFloat24 * 2;
+                            SET @pFloat53Out = @pFloat53 * 2;
 
-                        SELECT
-                            @pReal AS Real,
-                            @pFloat24 AS Float24,
-                            @pFloat53 AS Float53;
-                    '''
-                    ):
+                            SELECT
+                                @pReal AS Real,
+                                @pFloat24 AS Float24,
+                                @pFloat53 AS Float53;
+                        '''
+                ):
                     inputs = (
                         12345.6787109375,
                         1234567936.0,
@@ -786,18 +825,18 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_datetime.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pDatetime DATETIME,
-                        @pDatetimeOut DATETIME OUTPUT
-                    AS
-                        SET @pDatetimeOut = '{0}';
+                        cursor,
+                        sproc,
+                        '''
+                            @pDatetime DATETIME,
+                            @pDatetimeOut DATETIME OUTPUT
+                        AS
+                            SET @pDatetimeOut = '{0}';
 
-                        SELECT
-                            @pDatetime AS Datetime;
-                    '''.format(datetime(1999, 12, 31, 23, 59, 59).strftime('%Y-%m-%d %H:%M:%S'))
-                    ):
+                            SELECT
+                                @pDatetime AS Datetime;
+                        '''.format(datetime(1999, 12, 31, 23, 59, 59).strftime('%Y-%m-%d %H:%M:%S'))
+                ):
                     inputs = (
                         datetime(2001, 1, 1, 1, 1, 1, 123000),
                         datetime(1984, 1, 1, 1, 1, 1),
@@ -814,15 +853,15 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_datetime.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pSmallDatetime SMALLDATETIME,
-                        @pSmallDatetimeOut SMALLDATETIME OUTPUT
-                    AS
-                        SET @pSmallDatetimeOut = '{0}';
-                    '''.format(datetime(1999, 12, 31, 23, 59, 59).strftime('%Y-%m-%d %H:%M:%S'))
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pSmallDatetime SMALLDATETIME,
+                            @pSmallDatetimeOut SMALLDATETIME OUTPUT
+                        AS
+                            SET @pSmallDatetimeOut = '{0}';
+                        '''.format(datetime(1999, 12, 31, 23, 59, 59).strftime('%Y-%m-%d %H:%M:%S'))
+                ):
                     inputs = (
                         datetime(2001, 1, 1, 1, 1, 1, 123456),
                         datetime(1984, 1, 1, 1, 1, 1),
@@ -837,15 +876,15 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_decimal.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pDecimal DECIMAL(7,3),
-                        @pDecimalOut VARCHAR(MAX) OUTPUT
-                    AS
-                        SET @pDecimalOut = CONVERT(VARCHAR(MAX), @pDecimal);
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pDecimal DECIMAL(7,3),
+                            @pDecimalOut VARCHAR(MAX) OUTPUT
+                        AS
+                            SET @pDecimalOut = CONVERT(VARCHAR(MAX), @pDecimal);
+                        '''
+                ):
                     for value, string, truncation in (
                             (1000.0, '1000.000', False),
                             (-1000.0, '-1000.000', False),
@@ -884,15 +923,15 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_decimal_output.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pString VARCHAR(MAX),
-                        @pDecimalOut DECIMAL(15,5) OUTPUT
-                    AS
-                        SET @pDecimalOut = CONVERT(DECIMAL(15,5), @pString);
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pString VARCHAR(MAX),
+                            @pDecimalOut DECIMAL(15,5) OUTPUT
+                        AS
+                            SET @pDecimalOut = CONVERT(DECIMAL(15,5), @pString);
+                        '''
+                ):
                     for value in (
                             '1230.456',
                             '123456789.1234',
@@ -920,15 +959,15 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_decimal_outofrange.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pDecimal DECIMAL(7,3),
-                        @pDecimalOut VARCHAR(MAX) OUTPUT
-                    AS
-                        SET @pDecimalOut = CONVERT(VARCHAR(MAX), @pDecimal);
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pDecimal DECIMAL(7,3),
+                            @pDecimalOut VARCHAR(MAX) OUTPUT
+                        AS
+                            SET @pDecimalOut = CONVERT(VARCHAR(MAX), @pDecimal);
+                        '''
+                ):
                     for value in (
                             10 ** 38,
                             -10 ** 38,
@@ -952,14 +991,14 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_decimal_internalerror.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pDecimal DECIMAL(7,3)
-                    AS
-                        SELECT CONVERT(VARCHAR(MAX), @pDecimal);
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pDecimal DECIMAL(7,3)
+                        AS
+                            SELECT CONVERT(VARCHAR(MAX), @pDecimal);
+                        '''
+                ):
                     inputs = (Decimal('NaN'),)
                     try:
                         cursor.callproc(sproc, inputs)
@@ -976,16 +1015,15 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_varchar.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pVarChar VARCHAR(256),
-                        @pVarCharOut VARCHAR(256) OUTPUT
-                    AS
-                        SET @pVarCharOut = @pVarChar;
-                    '''
-                    ):
-
+                        cursor,
+                        sproc,
+                        '''
+                            @pVarChar VARCHAR(256),
+                            @pVarCharOut VARCHAR(256) OUTPUT
+                        AS
+                            SET @pVarCharOut = @pVarChar;
+                        '''
+                ):
                     format_ = (
                         unichr_(191) + unicode_(' 8 ') +
                         unichr_(247) + unicode_(' 2 = 4 ? {0} {1}')
@@ -1059,16 +1097,15 @@ parameters are replaced with output values.
                 with connection.cursor() as cursor:
                     sproc = self.test_ucs2_warning_as_error.__name__
                     with self.stored_procedure(
-                        cursor,
-                        sproc,
-                        '''
-                            @pVarChar VARCHAR(256),
-                            @pVarCharOut VARCHAR(256) OUTPUT
-                        AS
-                            SET @pVarCharOut = @pVarChar;
-                        '''
-                        ):
-
+                            cursor,
+                            sproc,
+                            '''
+                                @pVarChar VARCHAR(256),
+                                @pVarCharOut VARCHAR(256) OUTPUT
+                            AS
+                                SET @pVarCharOut = @pVarChar;
+                            '''
+                    ):
                         format_ = (
                             unichr_(191) + unicode_(' 8 ') +
                             unichr_(247) + unicode_(' 2 = 4 ? {0}')
@@ -1098,14 +1135,14 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_varchar_bytes.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pVarChar VARCHAR(MAX)
-                    AS
-                        SELECT LEN(@pVarChar), @pVarChar;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pVarChar VARCHAR(MAX)
+                        AS
+                            SELECT LEN(@pVarChar), @pVarChar;
+                        '''
+                ):
                     inputs = (b'some bytes for a VARCHAR parameter',)
                     cursor.callproc(sproc, inputs)
                     row = cursor.fetchone()
@@ -1117,14 +1154,14 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_varchar_max.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pVarChar VARCHAR(MAX)
-                    AS
-                        SELECT LEN(@pVarChar), @pVarChar;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pVarChar VARCHAR(MAX)
+                        AS
+                            SELECT LEN(@pVarChar), @pVarChar;
+                        '''
+                ):
                     lengths = [
                         1, 2, 3, 3999, 4000
                     ]
@@ -1145,23 +1182,22 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_varchar_null.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pVarChar VARCHAR(256),
-                        @pIsNullOut BIT OUTPUT
-                    AS
-                        IF @pVarChar IS NULL
-                            BEGIN
-                                SET @pIsNullOut = 1;
-                            END
-                        ELSE
-                            BEGIN
-                                SET @pIsNullOut = 0;
-                            END
-                    '''
-                    ):
-
+                        cursor,
+                        sproc,
+                        '''
+                            @pVarChar VARCHAR(256),
+                            @pIsNullOut BIT OUTPUT
+                        AS
+                            IF @pVarChar IS NULL
+                                BEGIN
+                                    SET @pIsNullOut = 1;
+                                END
+                            ELSE
+                                BEGIN
+                                    SET @pIsNullOut = 0;
+                                END
+                        '''
+                ):
                     for value in (None, unicode_(''), unicode_('0'), unicode_('one')):
                         inputs = (
                             value,
@@ -1179,20 +1215,19 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_varchar_null.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pVarChar VARCHAR(256)
-                    AS
-                        SELECT @pVarChar, LEN(@pVarChar) AS Length
-                    '''
-                    ):
-
+                        cursor,
+                        sproc,
+                        '''
+                            @pVarChar VARCHAR(256)
+                        AS
+                            SELECT @pVarChar, LEN(@pVarChar) AS Length
+                        '''
+                ):
                     for value in (None, unicode_(''), unicode_('0'), unicode_('one')):
                         inputs = (
                             value,
                         )
-                        outputs = cursor.callproc(sproc, inputs)
+                        cursor.callproc(sproc, inputs)
                         self.assertEqual(
                             tuple(cursor.fetchone()),
                             (None, None) if value in (None, unicode_('')) else (value, len(value))
@@ -1203,16 +1238,15 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_nvarchar.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pVarChar NVARCHAR(256),
-                        @pVarCharOut NVARCHAR(256) OUTPUT
-                    AS
-                        SET @pVarCharOut = @pVarChar;
-                    '''
-                    ):
-
+                        cursor,
+                        sproc,
+                        '''
+                            @pVarChar NVARCHAR(256),
+                            @pVarCharOut NVARCHAR(256) OUTPUT
+                        AS
+                            SET @pVarCharOut = @pVarChar;
+                        '''
+                ):
                     format_ = (
                         unichr_(191) + unicode_(' 8 ') +
                         unichr_(247) + unicode_(' 2 = 4 ? {0} {1} {2} test')
@@ -1280,14 +1314,14 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_nvarchar_max.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pVarChar NVARCHAR(MAX)
-                    AS
-                        SELECT LEN(@pVarChar), @pVarChar;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pVarChar NVARCHAR(MAX)
+                        AS
+                            SELECT LEN(@pVarChar), @pVarChar;
+                        '''
+                ):
                     lengths = [
                         1, 2, 3, 3999, 4000
                     ]
@@ -1311,23 +1345,22 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_nvarchar_null.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pNVarChar NVARCHAR(256),
-                        @pIsNullOut BIT OUTPUT
-                    AS
-                        IF @pNVarChar IS NULL
-                            BEGIN
-                                SET @pIsNullOut = 1;
-                            END
-                        ELSE
-                            BEGIN
-                                SET @pIsNullOut = 0;
-                            END
-                    '''
-                    ):
-
+                        cursor,
+                        sproc,
+                        '''
+                            @pNVarChar NVARCHAR(256),
+                            @pIsNullOut BIT OUTPUT
+                        AS
+                            IF @pNVarChar IS NULL
+                                BEGIN
+                                    SET @pIsNullOut = 1;
+                                END
+                            ELSE
+                                BEGIN
+                                    SET @pIsNullOut = 0;
+                                END
+                        '''
+                ):
                     for value in (None, unicode_(''), unicode_('0'), unicode_('one')):
                         inputs = (
                             value,
@@ -1341,15 +1374,15 @@ parameters are replaced with output values.
             with connection.cursor() as cursor:
                 sproc = self.test_guid.__name__
                 with self.stored_procedure(
-                    cursor,
-                    sproc,
-                    '''
-                        @pIn UNIQUEIDENTIFIER,
-                        @pOut UNIQUEIDENTIFIER OUTPUT
-                    AS
-                        SET @pOut = @pIn;
-                    '''
-                    ):
+                        cursor,
+                        sproc,
+                        '''
+                            @pIn UNIQUEIDENTIFIER,
+                            @pOut UNIQUEIDENTIFIER OUTPUT
+                        AS
+                            SET @pOut = @pIn;
+                        '''
+                ):
                     for value in (
                             None,
                             uuid.uuid1(),

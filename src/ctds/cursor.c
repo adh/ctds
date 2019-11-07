@@ -68,8 +68,7 @@ struct ResultSetDescription {
 
 struct ResultSetDescription* ResultSetDescription_create(size_t ncolumns)
 {
-    struct ResultSetDescription* description =
-        (struct ResultSetDescription*)tds_mem_malloc(ResultSetDescription_size(ncolumns));
+    struct ResultSetDescription* description = tds_mem_malloc(ResultSetDescription_size(ncolumns));
     if (description)
     {
         description->_refs = 1;
@@ -522,7 +521,8 @@ static const char s_Cursor_rowcount_doc[] =
     "\n"
     ".. note::\n"
     "\n"
-    "    This value is unreliable when :py:meth:`.execute` is called with parameters.\n"
+    "    This value is unreliable when :py:meth:`.execute` is called with parameters\n"
+    "    and using a version of FreeTDS prior to 1.1.\n"
     "\n"
     ":pep:`0249#rowcount`\n"
     "\n"
@@ -1121,8 +1121,7 @@ static PyObject* Cursor_callproc_internal(struct Cursor* cursor, const char* pro
                     {
                         int ix;
 
-                        outputparams = (struct OutputParameter*)tds_mem_calloc((size_t)noutputparams,
-                                                                               sizeof(struct OutputParameter));
+                        outputparams = tds_mem_calloc((size_t)noutputparams, sizeof(struct OutputParameter));
                         if (!outputparams)
                         {
                             break;
@@ -1303,6 +1302,7 @@ static char* strappend(char* existing, size_t nexisting, const char* suffix, siz
     @param paramstyle [in] The paramstyle used in the format string.
     @param parameters [in] The parameters available.
     @param nparameters [in] The number of parameters available.
+    @param maximum_width [in] Generate types with MAX width for variable width types.
     @param nsql [out] The length of the generated SQL string, in bytes.
 
     @return The utf-8 formatted SQL statement. The caller is responsible freeing the returned value.
@@ -1311,6 +1311,7 @@ static char* build_executesql_stmt(const char* format,
                                    enum ParamStyle paramstyle,
                                    PyObject* parameters,
                                    Py_ssize_t nparameters,
+                                   bool maximum_width,
                                    size_t* nsql)
 {
     char* sql = NULL;
@@ -1382,7 +1383,7 @@ static char* build_executesql_stmt(const char* format,
 #if defined(CTDS_USE_SP_EXECUTESQL)
                     if (ParamStyle_numeric == paramstyle)
                     {
-                        param = (char*)tds_mem_malloc(ARRAYSIZE("@param" STRINGIFY(UINT64_MAX)));
+                        param = tds_mem_malloc(ARRAYSIZE("@param" STRINGIFY(UINT64_MAX)));
                         if (param)
                         {
                             assert(-1 != paramnum);
@@ -1394,7 +1395,7 @@ static char* build_executesql_stmt(const char* format,
                     {
                         assert(parammarker_end >= parammarker_start);
                         nparam = 1 /* @ */ + (size_t)(parammarker_end - parammarker_start);
-                        param = (char*)tds_mem_malloc(nparam + 1 /* '\0' */);
+                        param = tds_mem_malloc(nparam + 1 /* '\0' */);
                         if (param)
                         {
                             char* paramname;
@@ -1418,6 +1419,8 @@ static char* build_executesql_stmt(const char* format,
                         break;
                     }
 
+                    UNUSED(maximum_width);
+
 #else /* if defined(CTDS_USE_SP_EXECUTESQL) */
                     /* Serialize the parameter to a string. */
                     do
@@ -1430,7 +1433,7 @@ static char* build_executesql_stmt(const char* format,
                         else
                         {
                             size_t nparamname = (size_t)(parammarker_end - parammarker_start);
-                            char* paramname = (char*)tds_mem_malloc(nparamname + 1 /* '\0' */);
+                            char* paramname = tds_mem_malloc(nparamname + 1 /* '\0' */);
                             if (!paramname)
                             {
                                 PyErr_NoMemory();
@@ -1467,7 +1470,7 @@ static char* build_executesql_stmt(const char* format,
                             break;
                         }
 
-                        param = Parameter_serialize((struct Parameter*)oparam, &nparam);
+                        param = Parameter_serialize((struct Parameter*)oparam, maximum_width, &nparam);
                         if (!param)
                         {
                             break;
@@ -1681,7 +1684,7 @@ static char* make_paramname(PyObject* oname, size_t* nparamname)
 #endif /* else if PY_MAJOR_VERSION < 3 */
 
         required = nname + 1 /* '@' */ + 1 /* '\0' */;
-        paramname = (char*)tds_mem_malloc(required);
+        paramname = tds_mem_malloc(required);
         if (!paramname)
         {
             PyErr_NoMemory();
@@ -1709,10 +1712,11 @@ static char* make_paramname(PyObject* oname, size_t* nparamname)
 
     @param paramstyle [in] The paramstyle, indicating whether a mapping or sequence is expected.
     @param parameters [in] A Python sequence or mapping of parameters.
+    @param maximum_width [in] Generate types with MAX width for variable width types.
 
     @return A new reference to a Python string object.
 */
-static PyObject* build_executesql_params(enum ParamStyle paramstyle, PyObject* parameters)
+static PyObject* build_executesql_params(enum ParamStyle paramstyle, PyObject* parameters, bool maximum_width)
 {
     PyObject* object = NULL;
     PyObject* items = NULL;
@@ -1769,7 +1773,7 @@ static PyObject* build_executesql_params(enum ParamStyle paramstyle, PyObject* p
             else
             {
                 size_t required = STRLEN("@param" STRINGIFY(UINT64_MAX)) + 1 /* '\0' */;
-                paramname = (char*)tds_mem_malloc(required);
+                paramname = tds_mem_malloc(required);
                 if (!paramname)
                 {
                     PyErr_NoMemory();
@@ -1803,7 +1807,7 @@ static PyObject* build_executesql_params(enum ParamStyle paramstyle, PyObject* p
                 break;
             }
 
-            sqltype = Parameter_sqltype(rpcparam);
+            sqltype = Parameter_sqltype(rpcparam, maximum_width);
             if (!sqltype)
             {
                 PyErr_NoMemory();
@@ -1822,7 +1826,7 @@ static PyObject* build_executesql_params(enum ParamStyle paramstyle, PyObject* p
                           strlen(sqltype) +
                           STRLEN(" OUTPUT") +
                           1 /* '\0' */;
-            paramdesc = (char*)tds_mem_malloc(nparamdesc);
+            paramdesc = tds_mem_malloc(nparamdesc);
             if (!paramdesc)
             {
                 PyErr_NoMemory();
@@ -1878,10 +1882,12 @@ static PyObject* build_executesql_params(enum ParamStyle paramstyle, PyObject* p
        parameter markers.
     @param sequence [in] An optional sequence of parameters to the SQL
        statement.
+    @param minimize_types [in] Convert Python types to the minimum required size
+       in SQL. This only applies to variable width types, such as (N)(VAR)CHAR.
 
     @return 0 on success, -1 on error.
 */
-static int Cursor_execute_internal(struct Cursor* cursor, const char* sqlfmt, PyObject* sequence)
+static int Cursor_execute_internal(struct Cursor* cursor, const char* sqlfmt, PyObject* sequence, bool minimize_types)
 {
     PyObject* isequence = PyObject_GetIter(sequence);
     if (isequence)
@@ -1974,6 +1980,7 @@ static int Cursor_execute_internal(struct Cursor* cursor, const char* sqlfmt, Py
                                                 cursor->paramstyle,
                                                 parameters,
                                                 nparameters,
+                                                !minimize_types,
                                                 &nsql);
                     if (!sql)
                     {
@@ -2023,7 +2030,7 @@ static int Cursor_execute_internal(struct Cursor* cursor, const char* sqlfmt, Py
                     do
                     {
                         PyObject* pair = NULL;
-                        value = build_executesql_params(cursor->paramstyle, parameters);
+                        value = build_executesql_params(cursor->paramstyle, parameters, !minimize_types);
                         if (!value)
                         {
                             break;
@@ -2174,7 +2181,7 @@ static int Cursor_execute_internal(struct Cursor* cursor, const char* sqlfmt, Py
 
 #else /* if defined(CTDS_USE_SP_EXECUTESQL) */
 
-static int Cursor_execute_internal(struct Cursor* cursor, const char* sqlfmt, PyObject* sequence)
+static int Cursor_execute_internal(struct Cursor* cursor, const char* sqlfmt, PyObject* sequence, bool minimize_types)
 {
     PyObject* isequence = PyObject_GetIter(sequence);
     if (isequence)
@@ -2255,6 +2262,7 @@ static int Cursor_execute_internal(struct Cursor* cursor, const char* sqlfmt, Py
                                         cursor->paramstyle,
                                         parameters,
                                         nparameters,
+                                        !minimize_types,
                                         &nsql);
             Py_XDECREF(parameters);
             parameters = NULL;
@@ -2336,7 +2344,7 @@ static PyObject* Cursor_execute(PyObject* self, PyObject* args)
             Py_INCREF(parameters);
             PyTuple_SET_ITEM(sequence, 0, parameters); /* parameters reference stolen by PyTuple_SET_ITEM */
         }
-        error = Cursor_execute_internal(cursor, sqlfmt, sequence);
+        error = Cursor_execute_internal(cursor, sqlfmt, sequence, true /* minimize_types */);
         Py_DECREF(sequence);
     }
     else
@@ -2379,7 +2387,13 @@ PyObject* Cursor_executemany(PyObject* self, PyObject* args)
         return NULL;
     }
 
-    if (Cursor_execute_internal(cursor, sqlfmt, iterable))
+    /*
+        Explicitly do not minimize SQL type widths in executemany to avoid truncation issues
+        when using sp_executesql and inferring the SQL type from the first parameter sequence.
+        If the first sequence has types that map to variable length SQL types, the minimal type
+        size may not be large enough for values in later sequences.
+    */
+    if (Cursor_execute_internal(cursor, sqlfmt, iterable, false /* minimize_types */))
     {
         return NULL;
     }
@@ -3053,7 +3067,7 @@ static struct RowList* Cursor_fetchrows(struct Cursor* cursor, size_t n)
             }
             assert(BUF_FULL != retcode);
 
-            new_rowbuffer = (struct RowBuffer*)tds_mem_malloc(rowsize);
+            new_rowbuffer = tds_mem_malloc(rowsize);
             if (!new_rowbuffer)
             {
                 ResultSetDescription_RowBuffer_free(description, rowbuffers);

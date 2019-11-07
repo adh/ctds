@@ -8,7 +8,8 @@ SUPPORTED_PYTHON_VERSIONS := \
     3.3 \
     3.4 \
     3.5 \
-    3.6
+    3.6 \
+    3.7
 
 VALGRIND_PYTHON_VERSIONS := \
     2.7.14 \
@@ -22,14 +23,14 @@ CHECKED_FREETDS_VERSIONS := \
     0.91.112 \
     0.92.405 \
     0.95.95 \
-    1.00.55 \
-    1.00.80
+    1.00.80 \
+	1.1.4
 
 # Valgrind FreeTDS versions are limited to one without sp_executesql support
 # and one with.
 VALGRIND_FREETDS_VERSIONS := \
-    0.91.112 \
-    1.00.55
+    $(firstword $(CHECKED_FREETDS_VERSIONS)) \
+    $(lastword $(CHECKED_FREETDS_VERSIONS))
 
 
 DEFAULT_PYTHON_VERSION := $(lastword $(SUPPORTED_PYTHON_VERSIONS))
@@ -82,10 +83,17 @@ help:
 	@echo "      TEST - Optional test specifier. e.g. \`make test TEST=ctds.tests.test_tds_connect\`"
 	@echo "      VERBOSE - Include more verbose output."
 
+DARWIN := $(findstring Darwin,$(shell uname))
 
 UNITTEST_DOCKER_IMAGE_NAME = ctds-unittest-python$(strip $(1))-$(strip $(2))
 SQL_SERVER_DOCKER_IMAGE_NAME := ctds-unittest-sqlserver
 VALGRIND_DOCKER_IMAGE_NAME = ctds-valgrind-python$(strip $(1))-$(strip $(2))
+
+DOCKER_ENV = \
+    -e DEBUG=1 \
+    $(if $(TDSDUMP),-e TDSDUMP=$(TDSDUMP)) \
+    $(if $(TEST),-e TEST=$(TEST)) \
+    $(if $(VERBOSE),-e VERBOSE=$(VERBOSE))
 
 define DOCKER_RM
 	@if [ ! -z `docker ps -a -f name=$(strip $(1)) -q` ]; then \
@@ -98,7 +106,7 @@ GH_PAGES_DIR := $(abspath .gh-pages)
 .PHONY: clean
 clean: stop-sqlserver
 	git clean -dfX
-	docker images -q ctds-unittest-* | xargs -r docker rmi
+	docker images -q ctds-unittest-* | xargs $(if $(DARWIN),,-r) docker rmi
 
 .PHONY: publish
 publish:
@@ -134,23 +142,20 @@ docker_$(strip $(1))_$(strip $(2)):
 
 .PHONY: test_$(strip $(1))_$(strip $(2))
 test_$(strip $(1))_$(strip $(2)): docker_$(strip $(1))_$(strip $(2)) start-sqlserver
-	docker run --init --rm \
-        -e DEBUG=1 \
+	docker run --init --rm -it \
+        $(DOCKER_ENV) \
         --network container:$(SQL_SERVER_DOCKER_IMAGE_NAME) \
-        $(if $(TDSDUMP), -e TDSDUMP=$(TDSDUMP)) \
-        $(if $(TEST), -e TEST=$(TEST)) \
         $(call UNITTEST_DOCKER_IMAGE_NAME, $(1), $(2)) \
         ./scripts/ctds-unittest.sh
 
 .PHONY: coverage_$(strip $(1))_$(strip $(2))
 coverage_$(strip $(1))_$(strip $(2)): docker_$(strip $(1))_$(strip $(2)) start-sqlserver
 	$(call DOCKER_RM, $(call UNITTEST_DOCKER_IMAGE_NAME, $(1), $(2))-coverage)
-	docker run --init \
+	docker run --init -it \
         -e CTDS_COVER=1 \
-        -e DEBUG=1 \
-        --workdir /usr/src/ctds/ \
-        --network container:$(SQL_SERVER_DOCKER_IMAGE_NAME) \
+        $(DOCKER_ENV) \
         --name $(call UNITTEST_DOCKER_IMAGE_NAME, $(1), $(2))-coverage \
+        --network container:$(SQL_SERVER_DOCKER_IMAGE_NAME) \
         $(call UNITTEST_DOCKER_IMAGE_NAME, $(1), $(2)) \
         ./scripts/ctds-coverage.sh
 	mkdir -p $$@
@@ -182,11 +187,9 @@ docker_valgrind_$(strip $(1))_$(strip $(2)):
 
 .PHONY: valgrind_$(strip $(1))_$(strip $(2))
 valgrind_$(strip $(1))_$(strip $(2)): docker_valgrind_$(strip $(1))_$(strip $(2)) start-sqlserver
-	docker run --init --rm \
-        -e DEBUG=1 \
+	docker run --init --rm -it \
+        $(DOCKER_ENV) \
         --network container:$(SQL_SERVER_DOCKER_IMAGE_NAME) \
-        $(if $(TDSDUMP), -e TDSDUMP=$(TDSDUMP)) \
-        $(if $(TEST), -e TEST=$(TEST)) \
         $(call VALGRIND_DOCKER_IMAGE_NAME, $(1), $(2)) \
         ./scripts/ctds-valgrind.sh
 endef
@@ -211,8 +214,8 @@ $(foreach PV, $(SUPPORTED_PYTHON_VERSIONS), $(eval $(call CHECK_RULE, $(PV))))
 define CHECKMETADATA_RULE
 .PHONY: checkmetadata_$(strip $(1))
 checkmetadata_$(strip $(1)): docker_$(strip $(1))_$(DEFAULT_FREETDS_VERSION)
-	docker run --init --rm \
-        --workdir /usr/src/ctds/ \
+	docker run --init --rm -it \
+        $(DOCKER_ENV) \
         $(call UNITTEST_DOCKER_IMAGE_NAME, $(strip $(1)), $(DEFAULT_FREETDS_VERSION)) \
         ./scripts/ctds-checkmetadata.sh
 endef
@@ -233,16 +236,14 @@ coverage: coverage_$(DEFAULT_PYTHON_VERSION)_$(DEFAULT_FREETDS_VERSION)
 
 .PHONY: pylint
 pylint: docker_$(DEFAULT_PYTHON_VERSION)_$(DEFAULT_FREETDS_VERSION)
-	docker run --init --rm \
-        --workdir /usr/src/ctds/ \
+	docker run --init --rm -it \
         $(call UNITTEST_DOCKER_IMAGE_NAME, $(DEFAULT_PYTHON_VERSION), $(DEFAULT_FREETDS_VERSION)) \
         ./scripts/ctds-pylint.sh
 
 .PHONY: doc
 doc: docker_$(DEFAULT_PYTHON_VERSION)_$(DEFAULT_FREETDS_VERSION)
 	$(call DOCKER_RM, $(call UNITTEST_DOCKER_IMAGE_NAME, $(DEFAULT_PYTHON_VERSION), $(DEFAULT_FREETDS_VERSION))-doc)
-	docker run --init \
-        --workdir /usr/src/ctds/ \
+	docker run --init -it \
         --name $(call UNITTEST_DOCKER_IMAGE_NAME, $(DEFAULT_PYTHON_VERSION), $(DEFAULT_FREETDS_VERSION))-doc \
         $(call UNITTEST_DOCKER_IMAGE_NAME, $(DEFAULT_PYTHON_VERSION), $(DEFAULT_FREETDS_VERSION)) \
         ./scripts/ctds-doc.sh "$(notdir $(GH_PAGES_DIR))"

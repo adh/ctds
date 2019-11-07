@@ -40,9 +40,10 @@ class TestExternalDatabase(unittest.TestCase):
 
     def get_option(self, key, type_=str):
         section = self.__class__.__name__
-        for section_ in (section, 'DEFAULT'): # pragma: nocover
+        for section_ in (section, 'DEFAULT'): # pragma: no branch
             if self.parser.has_option(section_, key):
                 return type_(self.parser.get(section_, key))
+        return None # pragma: no cover
 
     @staticmethod
     def parameter_type(cursor, value):
@@ -85,10 +86,11 @@ class TestExternalDatabase(unittest.TestCase):
         '''Connect to the database using parameters defined in the config.
         '''
 
-        kwargs_ = dict(
+        kwargs_ = dict( # pylint: disable=consider-using-dict-comprehension
             [
                 (key, self.get_option(key, type_))
                 for key, type_ in (
+                    ('appname', str),
                     ('autocommit', bool),
                     ('database', str),
                     ('instance', str),
@@ -103,10 +105,10 @@ class TestExternalDatabase(unittest.TestCase):
         )
 
         kwargs_.update(kwargs)
+        kwargs_.setdefault('appname', 'egg.tds.unittest')
 
         return ctds.connect(
             self.get_option('server'),
-            appname='egg.tds.unittest',
             **kwargs_
         )
 
@@ -124,12 +126,12 @@ class TestExternalDatabase(unittest.TestCase):
             r'^freetds v(?P<major>[\d]+)\.(?P<minor>[\d]+)(?:\.(?P<patch>[\d]+))?$',
             ctds.freetds_version
         )
-        if matches: # pragma: nobranch
-            return (
-                int(matches.group('major')),
-                int(matches.group('minor') or 0),
-                int(matches.group('patch') or 0),
-            )
+        assert matches is not None
+        return (
+            int(matches.group('major')),
+            int(matches.group('minor') or 0),
+            int(matches.group('patch') or 0),
+        )
 
     @property
     def use_sp_executesql(self):
@@ -144,8 +146,29 @@ class TestExternalDatabase(unittest.TestCase):
         return self.freetds_version >= (1, 0, 74)
 
     @property
+    def ntlmv2_supported(self):
+        return self.freetds_version >= (1, 0, 0)
+
+    @property
     def use_utf16(self):
         return self.freetds_version >= (1, 0, 0)
+
+    @property
+    def have_valid_rowcount(self):
+        # FreeTDS 1.1+ properly returns rowcount, even when calling sp_executesql.
+        return self.freetds_version >= (1, 1, 0) or not self.use_sp_executesql
+
+    @property
+    def tdstime_supported(self):
+        return self.freetds_version >= (0, 95, 0)
+
+    @property
+    def tdsdatetime2_supported(self):
+        return self.freetds_version >= (0, 95, 0)
+
+    @property
+    def bcp_empty_string_supported(self):
+        return self.freetds_version >= (0, 95, 0)
 
     # Older versions of FreeTDS improperly round the money to the nearest hundredth.
     def round_money(self, money):
