@@ -118,6 +118,7 @@ struct Cursor {
         The paramstyle to use on .execute*() calls.
     */
     enum ParamStyle paramstyle;
+    DBINT proc_result;
 };
 
 #define warn_extension_used(_method) \
@@ -619,6 +620,21 @@ static PyObject* Cursor_spid_get(PyObject* self, void* closure)
     UNUSED(closure);
 }
 
+static const char s_Cursor_proc_result_doc[] =
+    "Retrieve the return value of last procedure called by callproc()"
+    "\n"
+    ":rtype: int\n";
+
+static PyObject* Cursor_proc_result_get(PyObject* self, void* closure)
+{
+    struct Cursor* cursor = (struct Cursor*)self;
+
+    return PyLong_FromLong((long)cursor->proc_result);
+
+    UNUSED(closure);
+}
+
+
 static const char s_Cursor_Parameter_doc[] =
     "Convenience method to :py:class:`ctds.Parameter`.\n"
     "\n"
@@ -644,6 +660,7 @@ static PyGetSetDef Cursor_getset[] = {
     { (char*)"rownumber",   Cursor_rownumber_get,   NULL,                 (char*)s_Cursor_rownumber_doc,   NULL },
     { (char*)"spid",        Cursor_spid_get,        NULL,                 (char*)s_Cursor_spid_doc,        NULL },
     { (char*)"Parameter",   Cursor_Parameter_get,   NULL,                 (char*)s_Cursor_Parameter_doc,   NULL },
+    { (char*)"proc_result", Cursor_proc_result_get, NULL,                 (char*)s_Cursor_proc_result_doc, NULL },
     { NULL,                 NULL,                   NULL,                 NULL,                            NULL }
 };
 
@@ -1190,10 +1207,9 @@ static PyObject* Cursor_callproc_internal(struct Cursor* cursor, const char* pro
 
     Py_XDECREF(rpcparams);
 
+    cursor->proc_result = retstatus;
+    
     return results;
-
-    /* $TODO: figure out some way to expose the sproc return status. */
-    UNUSED(retstatus);
 }
 
 /* https://www.python.org/dev/peps/pep-0249/#callproc */
